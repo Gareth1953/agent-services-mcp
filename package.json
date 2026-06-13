@@ -1,15 +1,22 @@
 {
   "name": "agent-services-mcp",
   "version": "0.1.0",
-  "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "Thin MCP server exposing provenance-receipts and quality-gate as discoverable tools. Wraps the existing Workers over HTTP; does not reimplement their logic.",
+  "mcpName": "io.github.Gareth1953/agent-services-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Gareth1953/agent-services-mcp.git"
+  },
   "bin": { "agent-services-mcp": "dist/index.js" },
+  "files": ["dist", "README.md"],
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

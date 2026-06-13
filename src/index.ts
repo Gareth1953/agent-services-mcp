@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // agent-services-mcp — MCP server entry point.
 //
 // A thin MCP server (official @modelcontextprotocol/sdk, stdio transport) that
