@@ -44,14 +44,19 @@ with `isError: true` and the response body preserved, so the caller can react.
 
 The two service URLs are environment-configurable (no secrets — just base URLs):
 
-| Env var            | Default                  |
-| ------------------ | ------------------------ |
-| `PROVENANCE_URL`   | `http://localhost:8787`  |
-| `QUALITY_GATE_URL` | `http://localhost:8788`  |
+| Env var            | Live (deployed)                                          | Local dev fallback        |
+| ------------------ | -------------------------------------------------------- | ------------------------- |
+| `PROVENANCE_URL`   | `https://provenance-receipts.gpmiddleton71.workers.dev`  | `http://localhost:8787`   |
+| `QUALITY_GATE_URL` | `https://quality-gate.gpmiddleton71.workers.dev`         | `http://localhost:8788`   |
 
-Nothing is deployed to a public URL yet, so defaults point at local
-`wrangler dev`. **Port note:** both Workers default to `:8787`, so run
-quality-gate on a different port (e.g. `:8788`) to avoid a clash.
+`.env.example` and the client config below point at the **live** deployments. If
+the vars are unset, the server falls back to localhost for local `wrangler dev`
+(both Workers default to `:8787`, so run quality-gate on `:8788` to avoid a clash).
+
+> Against the live services, the **paid** tools (`certify_provenance`,
+> `score_quality`) require x402 — this wrapper forwards the request and holds no
+> wallet, so without an `X-PAYMENT` they return a `402` (the payment requirements)
+> surfaced as `isError`. The free tools work as normal.
 
 ## Quickstart (local)
 
@@ -69,11 +74,16 @@ node scripts/test-client.mjs
 
 # 3b. (optional, costs ~$0.012) prove the paid score_quality path end-to-end
 node scripts/test-score.mjs
+
+# 3c. Smoke-test the wrapper against the LIVE deployed services (free — the
+#     paid tools return a forwarded 402; no payment, no scoring call)
+node scripts/test-live.mjs
 ```
 
-`scripts/test-client.mjs` exercises the free tools; `scripts/test-score.mjs`
-makes one real Anthropic scoring call through `score_quality` and then verifies
-the returned receipt.
+`scripts/test-client.mjs` exercises the free tools locally; `scripts/test-score.mjs`
+makes one real Anthropic scoring call through `score_quality`;
+`scripts/test-live.mjs` points the wrapper at the deployed workers.dev URLs and
+asserts the free tools work and the paid tools forward the x402 `402`.
 
 ## Connecting an MCP client (stdio)
 
@@ -88,8 +98,8 @@ as a subprocess. Example for a Claude Desktop / Claude Code style
       "command": "node",
       "args": ["C:\\Users\\Gareth\\agent-services-mcp\\dist\\index.js"],
       "env": {
-        "PROVENANCE_URL": "http://localhost:8787",
-        "QUALITY_GATE_URL": "http://localhost:8788"
+        "PROVENANCE_URL": "https://provenance-receipts.gpmiddleton71.workers.dev",
+        "QUALITY_GATE_URL": "https://quality-gate.gpmiddleton71.workers.dev"
       }
     }
   }
@@ -131,9 +141,12 @@ and [quality-gate/docs/VERIFYING.md](../quality-gate/docs/VERIFYING.md).
 - [x] **Step 1 — skeleton + tool definitions** (`src/tools.ts`)
 - [x] **Step 2 — tool handlers (HTTP forwarding) + local smoke test**
 - [x] **Step 3 — README: what it is, the tools, and how an MCP client connects**
+- [x] **Live — pointed at the deployed services** (`*.gpmiddleton71.workers.dev`)
+      and verified end-to-end via `scripts/test-live.mjs`: free tools work; paid
+      tools forward the x402 `402`.
 
-All five tool paths verified locally, including one paid `score_quality` call
-end-to-end through the wrapper.
+All five tool paths verified locally (including one paid `score_quality` call
+end-to-end through the wrapper) and against the live deployments.
 
 ## Stack
 
@@ -150,8 +163,9 @@ agent-services-mcp/
 │   ├── index.ts     # MCP server: registers tools, forwards HTTP, stdio transport
 │   └── tools.ts     # the 5 tool definitions (names, descriptions, Zod schemas)
 ├── scripts/
-│   ├── test-client.mjs  # MCP stdio client — free tool smoke test
-│   └── test-score.mjs   # MCP stdio client — one paid score_quality e2e check
+│   ├── test-client.mjs  # MCP stdio client — free tool smoke test (local)
+│   ├── test-score.mjs   # MCP stdio client — one paid score_quality e2e check
+│   └── test-live.mjs    # MCP stdio client — against the live deployed services
 ├── package.json
 ├── tsconfig.json
 ├── .gitignore
