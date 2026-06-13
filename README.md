@@ -4,9 +4,9 @@ A single **thin MCP (Model Context Protocol) server** that exposes two existing
 services as discoverable tools, so AI agents and MCP-compatible clients can find
 and use them through one connection:
 
-- **[provenance-receipts](../provenance-receipts)** — certifies content **origin**;
+- **[provenance-receipts](https://github.com/Gareth1953/provenance-receipts)** — certifies content **origin**;
   returns an Ed25519-signed receipt.
-- **[quality-gate](../quality-gate)** — scores content **quality** against a
+- **[quality-gate](https://github.com/Gareth1953/quality-gate)** — scores content **quality** against a
   published rubric; returns an Ed25519-signed score receipt.
 
 > **It is a thin wrapper.** Every tool forwards an HTTP call to the underlying
@@ -133,8 +133,8 @@ The receipts returned by `certify_provenance` and `score_quality` are
 Ed25519-signed and verifiable **without trusting any of these services** — re-hash
 the content and check the signature against the service's public key. Each service
 ships a runnable independent verifier and recipe: see
-[provenance-receipts/docs/VERIFYING.md](../provenance-receipts/docs/VERIFYING.md)
-and [quality-gate/docs/VERIFYING.md](../quality-gate/docs/VERIFYING.md).
+[provenance-receipts/docs/VERIFYING.md](https://github.com/Gareth1953/provenance-receipts/blob/main/docs/VERIFYING.md)
+and [quality-gate/docs/VERIFYING.md](https://github.com/Gareth1953/quality-gate/blob/main/docs/VERIFYING.md).
 
 ## Build status
 
