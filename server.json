@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Gareth1953/agent-services-mcp",
+  "description": "Thin MCP wrapper exposing content-provenance and quality-scoring as 5 tools.",
+  "repository": {
+    "url": "https://github.com/Gareth1953/agent-services-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "agent-services-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "PROVENANCE_URL",
+          "description": "Base URL of the provenance-receipts service. Optional; defaults to the live workers.dev URL.",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "QUALITY_GATE_URL",
+          "description": "Base URL of the quality-gate service. Optional; defaults to the live workers.dev URL.",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}
