@@ -1,16 +1,16 @@
 // Tool definitions for the agent-services-mcp server.
 //
 // This file is the single source of truth for the tools this MCP server exposes.
-// Each entry maps a tool name -> an HTTP endpoint on one of the two underlying
-// services (provenance-receipts or quality-gate). Handlers that actually forward
-// the HTTP call are implemented in step 2; this file is definitions only.
+// Each entry maps a tool name -> an HTTP endpoint on one of the three underlying
+// services (provenance-receipts, quality-gate, or agent-action-audit). The
+// handler forwards the HTTP call; it does not reimplement service logic.
 //
 // Descriptions are written to be HONEST and precise — they state what each
 // service proves AND what it does not, consistent with the services' own docs.
 
 import { z, type ZodRawShape } from "zod";
 
-export type ServiceName = "provenance" | "quality";
+export type ServiceName = "provenance" | "quality" | "audit";
 
 export interface ToolDefinition {
   name: string;
@@ -166,5 +166,75 @@ export const TOOLS: ToolDefinition[] = [
       "against, along with its version. Read this to understand exactly what a quality " +
       "score means and does not mean. Free; takes no input.",
     inputSchema: {},
+  },
+  {
+    name: "audit_action",
+    title: "Audit an agent action",
+    service: "audit",
+    method: "POST",
+    path: "/v1/audit",
+    paid: true,
+    description:
+      "Create a tamper-evident AUDIT RECEIPT for an action an agent took, via the " +
+      "agent-action-audit service. Returns an Ed25519-signed receipt committing to a " +
+      "SHA-256 hash of the action, your caller-attested actor_metadata (who/what acted + " +
+      "stated authority), a hash of the optional context, and a service-set timestamp.\n\n" +
+      "PROVES: the action RECORD is genuine — issued by the holder of the service's signing " +
+      "key and unaltered since issue (tamper-evident).\n" +
+      "DOES NOT PROVE: that the agent's claim is true. action, actor_metadata, and context " +
+      "are CALLER-ATTESTED — the receipt proves you CLAIMED this exact record at audit time, " +
+      "not that the agent actually did it, nor that it was authorized or correct. This is an " +
+      "accountability/audit tool, NOT a lie-detector.\n\n" +
+      "Note: /v1/audit is the paid action; when the underlying service has x402 payments " +
+      "enabled it may require a micropayment. This wrapper forwards the request as-is.",
+    inputSchema: {
+      action: z
+        .string()
+        .min(1)
+        .describe("What the agent did (the action being audited). Non-empty."),
+      actor_metadata: z
+        .record(z.unknown())
+        .describe(
+          "Caller-attested: who/what performed the action and the stated authority it " +
+            "acted under (e.g. { agent, operator, authority }). Recorded verbatim and " +
+            "covered by the signature; proves you claimed it, not that it is true.",
+        ),
+      context: z
+        .record(z.unknown())
+        .optional()
+        .describe(
+          "Optional caller-attested supporting detail. Hashed into the receipt; an absent " +
+            "context hashes the canonical empty object.",
+        ),
+    },
+  },
+  {
+    name: "verify_audit",
+    title: "Verify an audit receipt",
+    service: "audit",
+    method: "POST",
+    path: "/v1/verify",
+    paid: false,
+    description:
+      "Verify an audit receipt against its record via agent-action-audit. Re-hashes the " +
+      "submitted action + context and checks they (and actor_metadata) all match the " +
+      "receipt, plus the Ed25519 signature. Returns { valid, details }. `valid` is true only " +
+      "if the submitted action, context, AND actor_metadata all match the receipt AND the " +
+      "signature is valid under the service's public key. Free. A 200 response means " +
+      "verification ran — always read `valid` (false means the record was altered or the " +
+      "receipt forged).",
+    inputSchema: {
+      action: z.string().describe("The action the receipt was issued for."),
+      actor_metadata: z
+        .record(z.unknown())
+        .describe("The actor_metadata the receipt was issued for."),
+      context: z
+        .record(z.unknown())
+        .optional()
+        .describe("The optional context the receipt was issued for (omit if none)."),
+      receipt: receiptShape.describe(
+        "An audit receipt as returned by audit_action.",
+      ),
+    },
   },
 ];
