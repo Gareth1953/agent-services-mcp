@@ -1,9 +1,9 @@
 {
   "name": "agent-services-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
   "type": "module",
-  "description": "Thin MCP server exposing provenance-receipts and quality-gate as discoverable tools. Wraps the existing Workers over HTTP; does not reimplement their logic.",
+  "description": "Thin MCP server exposing provenance-receipts, quality-gate and agent-action-audit as discoverable tools. Wraps the existing Workers over HTTP; does not reimplement their logic.",
   "mcpName": "io.github.Gareth1953/agent-services-mcp",
   "repository": {
     "type": "git",
