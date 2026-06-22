@@ -5,8 +5,8 @@
 // services (provenance-receipts, quality-gate, or agent-action-audit). The
 // handler forwards the HTTP call; it does not reimplement service logic.
 //
-// Descriptions are written to be HONEST and precise — they state what each
-// service proves AND what it does not, consistent with the services' own docs.
+// Descriptions are HONEST and front-load what an agent needs to decide whether to
+// call: COST (paid/free), what it does, when to use it, and what it returns.
 
 import { z, type ZodRawShape } from "zod";
 
@@ -21,6 +21,7 @@ export interface ToolDefinition {
   paid: boolean; // whether the underlying endpoint can charge via x402
   description: string;
   inputSchema: ZodRawShape;
+  outputSchema?: ZodRawShape; // optional structured-output schema
 }
 
 // A receipt is an arbitrary signed object returned by a service. We keep the
@@ -29,6 +30,45 @@ export interface ToolDefinition {
 const receiptShape = z
   .record(z.unknown())
   .describe("A signed receipt object exactly as returned by the service.");
+
+// Optional payment token accepted by PAID tools. The x402 flow is two-step:
+// call once without it to get the 402 requirements, then resend with it to pay.
+const xPayment = {
+  x_payment: z
+    .string()
+    .optional()
+    .describe(
+      "Optional x402 payment token (the base64 X-PAYMENT value). Leave unset on the " +
+        "first call to receive the 402 payment requirements; then build the token with " +
+        "an x402 client + wallet and resend it here to pay and get the result. " +
+        "Forwarded as the X-PAYMENT header — this wrapper holds no wallet of its own.",
+    ),
+};
+
+// Structured output for the verify_* tools.
+const verifyOutput = {
+  valid: z
+    .boolean()
+    .describe(
+      "True only if the content/record matches the receipt AND the Ed25519 signature is valid.",
+    ),
+  details: z
+    .record(z.unknown())
+    .optional()
+    .describe("Per-check breakdown (e.g. hash match, signature valid)."),
+};
+
+// Structured output for score_quality (all optional so it never mis-validates a
+// 'no pass, no pay' response, which returns receipt: null).
+const scoreOutput = {
+  receipt: z
+    .record(z.unknown())
+    .nullable()
+    .optional()
+    .describe("Signed score receipt, or null if below target_score (no pass, no pay)."),
+  score: z.number().optional().describe("Total score 0–100, when present."),
+  breakdown: z.record(z.unknown()).optional().describe("Per-dimension scores and flags."),
+};
 
 export const TOOLS: ToolDefinition[] = [
   {
@@ -39,22 +79,14 @@ export const TOOLS: ToolDefinition[] = [
     path: "/v1/certify",
     paid: true,
     description:
-      "Certify the ORIGIN of a piece of content via the provenance-receipts service. " +
-      "Returns an Ed25519-signed receipt committing to a SHA-256 hash of the content, " +
-      "your caller-attested generator_metadata, and a service-set timestamp.\n\n" +
-      "PROVES: the content is unmodified (hash) and the receipt was issued by the holder " +
-      "of the service's signing key.\n" +
-      "DOES NOT PROVE: it does not independently verify generator_metadata — the receipt " +
-      "proves you CLAIMED that metadata at certification time, not that a specific model " +
-      "actually produced the content. This is proof-of-origin/tamper-evidence, not " +
-      "AI-detection and not a truth guarantee.\n\n" +
-      "Note: /v1/certify is the paid action; when the underlying service has x402 payments " +
-      "enabled it may require a micropayment. This wrapper forwards the request as-is.",
+      "PAID (x402 micropayment in USDC on Base; exact amount is returned in the 402 challenge — pay via x_payment).\n" +
+      "Certifies the ORIGIN of content: returns an Ed25519-signed receipt over a SHA-256 hash of the content, your caller-attested generator_metadata, and a service timestamp.\n" +
+      "USE WHEN you need tamper-evident proof of exactly what content existed at a point in time. Verify it later for FREE with verify_provenance.\n" +
+      "PROVES: the content is unmodified (hash) and the receipt was issued by the holder of the service's signing key.\n" +
+      "DOES NOT PROVE: generator_metadata — the receipt proves you CLAIMED that metadata, not that a specific model produced the content. Proof-of-origin/tamper-evidence, NOT AI-detection and NOT a truth guarantee.\n" +
+      "Two-step: call once with no x_payment to get the 402 requirements, then resend with x_payment to pay.",
     inputSchema: {
-      content: z
-        .string()
-        .min(1)
-        .describe("The exact content to certify. Non-empty."),
+      content: z.string().min(1).describe("The exact content to certify. Non-empty."),
       generator_metadata: z
         .record(z.unknown())
         .optional()
@@ -63,6 +95,7 @@ export const TOOLS: ToolDefinition[] = [
             "(e.g. { model, provider }). Recorded verbatim; the receipt proves you " +
             "claimed it, not that a specific model ran.",
         ),
+      ...xPayment,
     },
   },
   {
@@ -73,20 +106,14 @@ export const TOOLS: ToolDefinition[] = [
     path: "/v1/verify",
     paid: false,
     description:
-      "Verify a provenance receipt against its content via provenance-receipts. " +
-      "Re-hashes the content and checks the Ed25519 signature; returns { valid, details }. " +
-      "`valid` is true only if BOTH the content hash matches the receipt AND the signature " +
-      "is valid under the service's public key. Free. A 200 response means verification ran " +
-      "— always read `valid` (false means the content was modified or the receipt was " +
-      "altered/forged).",
+      "FREE. Verifies a provenance receipt against its content (re-hashes the content, checks the Ed25519 signature).\n" +
+      "USE WHEN you have a receipt + the original content and need to confirm it's genuine and unmodified.\n" +
+      "RETURNS: { valid, details }. valid is true only if the content hash matches the receipt AND the signature is valid under the service's public key. A 200 means verification ran — always read valid (false = content modified or receipt altered/forged).",
     inputSchema: {
-      content: z
-        .string()
-        .describe("The content to check against the receipt."),
-      receipt: receiptShape.describe(
-        "A provenance receipt as returned by certify_provenance.",
-      ),
+      content: z.string().describe("The content to check against the receipt."),
+      receipt: receiptShape.describe("A provenance receipt as returned by certify_provenance."),
     },
+    outputSchema: verifyOutput,
   },
   {
     name: "score_quality",
@@ -96,31 +123,19 @@ export const TOOLS: ToolDefinition[] = [
     path: "/v1/score",
     paid: true,
     description:
-      "Score content against the quality-gate service's PUBLISHED rubric and get an " +
-      "Ed25519-signed score receipt. The rubric scores four dimensions — clarity, " +
-      "completeness, internal consistency, and obvious-error freedom (0–25 each, summing " +
-      "to 0–100) — plus flags from a closed vocabulary. Read the exact rubric with " +
-      "get_quality_rubric.\n\n" +
-      "WHAT THIS IS: a reproducible score AGAINST OUR PUBLISHED RUBRIC (vX).\n" +
-      "WHAT IT IS NOT: a measure of absolute truth, an external/third-party standard, or a " +
-      "fact-check — 'obvious-error freedom' catches errors evident from the text or common " +
-      "knowledge, not external verification.\n\n" +
-      "Optional target_score (0–100) enables 'no pass, no pay': if the score is below your " +
-      "target, no receipt is issued and (when payments are on) no charge is made — the " +
-      "response returns the failing breakdown with receipt: null.\n\n" +
-      "Note: /v1/score is the paid action (one Claude API scoring pass per call) and may " +
-      "require an x402 micropayment when the underlying service has payments enabled.",
+      "PAID (x402 micropayment in USDC on Base; exact amount is returned in the 402 challenge — pay via x_payment).\n" +
+      "Scores content against quality-gate's PUBLISHED rubric (clarity, completeness, internal consistency, obvious-error freedom — 0–25 each, summing 0–100) and returns an Ed25519-signed score receipt. Read the exact rubric for FREE with get_quality_rubric.\n" +
+      "USE WHEN you need a reproducible, signed quality score for a piece of content.\n" +
+      "RETURNS: a signed score receipt; or, with target_score set, receipt:null + the failing breakdown ('no pass, no pay' — no receipt and no charge below target).\n" +
+      "WHAT IT IS NOT: a measure of absolute truth, an external/third-party standard, or a fact-check.\n" +
+      "Two-step: call once with no x_payment to get the 402 requirements, then resend with x_payment to pay.",
     inputSchema: {
-      content: z
-        .string()
-        .min(1)
-        .describe("The content to score. Non-empty."),
+      content: z.string().min(1).describe("The content to score. Non-empty."),
       rubric_version: z
         .string()
         .optional()
         .describe(
-          "Optional rubric version to score against; must match the service's current " +
-            "version (e.g. \"v1\") if provided.",
+          "Optional rubric version to score against; must match the service's current version (e.g. \"v1\") if provided.",
         ),
       target_score: z
         .number()
@@ -128,10 +143,11 @@ export const TOOLS: ToolDefinition[] = [
         .max(100)
         .optional()
         .describe(
-          "Optional 0–100 threshold. Enables 'no pass, no pay': below this, no receipt " +
-            "is issued and no charge is made.",
+          "Optional 0–100 threshold. Enables 'no pass, no pay': below this, no receipt is issued and no charge is made.",
         ),
+      ...xPayment,
     },
+    outputSchema: scoreOutput,
   },
   {
     name: "verify_quality",
@@ -141,18 +157,14 @@ export const TOOLS: ToolDefinition[] = [
     path: "/v1/verify",
     paid: false,
     description:
-      "Verify a quality score receipt against its content via quality-gate. Re-hashes the " +
-      "content and checks the Ed25519 signature, which covers the score itself — so a " +
-      "forged or altered score fails. Returns { valid, details }. Free. A 200 response " +
-      "means verification ran — always read `valid`.",
+      "FREE. Verifies a quality score receipt against its content (re-hashes the content, checks the Ed25519 signature, which covers the score itself — so a forged or altered score fails).\n" +
+      "USE WHEN you have a score receipt + the content and need to confirm the score is genuine.\n" +
+      "RETURNS: { valid, details }. A 200 means verification ran — always read valid.",
     inputSchema: {
-      content: z
-        .string()
-        .describe("The content the score receipt was issued for."),
-      receipt: receiptShape.describe(
-        "A quality score receipt as returned by score_quality.",
-      ),
+      content: z.string().describe("The content the score receipt was issued for."),
+      receipt: receiptShape.describe("A quality score receipt as returned by score_quality."),
     },
+    outputSchema: verifyOutput,
   },
   {
     name: "get_quality_rubric",
@@ -162,9 +174,8 @@ export const TOOLS: ToolDefinition[] = [
     path: "/v1/rubric",
     paid: false,
     description:
-      "Fetch the published Quality Gate rubric (markdown) that score_quality grades " +
-      "against, along with its version. Read this to understand exactly what a quality " +
-      "score means and does not mean. Free; takes no input.",
+      "FREE; takes no input. Fetch the published Quality Gate rubric (markdown) + its version that score_quality grades against.\n" +
+      "USE WHEN you want to understand exactly what a quality score means and does not mean before calling score_quality.",
     inputSchema: {},
   },
   {
@@ -175,37 +186,28 @@ export const TOOLS: ToolDefinition[] = [
     path: "/v1/audit",
     paid: true,
     description:
-      "Create a tamper-evident AUDIT RECEIPT for an action an agent took, via the " +
-      "agent-action-audit service. Returns an Ed25519-signed receipt committing to a " +
-      "SHA-256 hash of the action, your caller-attested actor_metadata (who/what acted + " +
-      "stated authority), a hash of the optional context, and a service-set timestamp.\n\n" +
-      "PROVES: the action RECORD is genuine — issued by the holder of the service's signing " +
-      "key and unaltered since issue (tamper-evident).\n" +
-      "DOES NOT PROVE: that the agent's claim is true. action, actor_metadata, and context " +
-      "are CALLER-ATTESTED — the receipt proves you CLAIMED this exact record at audit time, " +
-      "not that the agent actually did it, nor that it was authorized or correct. This is an " +
-      "accountability/audit tool, NOT a lie-detector.\n\n" +
-      "Note: /v1/audit is the paid action; when the underlying service has x402 payments " +
-      "enabled it may require a micropayment. This wrapper forwards the request as-is.",
+      "PAID (x402 micropayment in USDC on Base; exact amount is returned in the 402 challenge — pay via x_payment).\n" +
+      "Creates a tamper-evident AUDIT RECEIPT for an action an agent took: an Ed25519-signed receipt over a SHA-256 hash of the action, your caller-attested actor_metadata, a hash of optional context, and a timestamp.\n" +
+      "USE WHEN you need an accountability record proving exactly what an agent claimed it did, and when. Verify later for FREE with verify_audit.\n" +
+      "PROVES: the action RECORD is genuine (issued by the service's signing key) and unaltered since issue.\n" +
+      "DOES NOT PROVE: that the agent's claim is true. action/actor_metadata/context are CALLER-ATTESTED — proof you CLAIMED this exact record, not that the agent did it, nor that it was authorized or correct. An accountability/audit tool, NOT a lie-detector.\n" +
+      "Two-step: call once with no x_payment to get the 402 requirements, then resend with x_payment to pay.",
     inputSchema: {
-      action: z
-        .string()
-        .min(1)
-        .describe("What the agent did (the action being audited). Non-empty."),
+      action: z.string().min(1).describe("What the agent did (the action being audited). Non-empty."),
       actor_metadata: z
         .record(z.unknown())
         .describe(
-          "Caller-attested: who/what performed the action and the stated authority it " +
-            "acted under (e.g. { agent, operator, authority }). Recorded verbatim and " +
-            "covered by the signature; proves you claimed it, not that it is true.",
+          "Caller-attested: who/what performed the action and the stated authority it acted under " +
+            "(e.g. { agent, operator, authority }). Recorded verbatim and covered by the signature; " +
+            "proves you claimed it, not that it is true.",
         ),
       context: z
         .record(z.unknown())
         .optional()
         .describe(
-          "Optional caller-attested supporting detail. Hashed into the receipt; an absent " +
-            "context hashes the canonical empty object.",
+          "Optional caller-attested supporting detail. Hashed into the receipt; an absent context hashes the canonical empty object.",
         ),
+      ...xPayment,
     },
   },
   {
@@ -216,25 +218,18 @@ export const TOOLS: ToolDefinition[] = [
     path: "/v1/verify",
     paid: false,
     description:
-      "Verify an audit receipt against its record via agent-action-audit. Re-hashes the " +
-      "submitted action + context and checks they (and actor_metadata) all match the " +
-      "receipt, plus the Ed25519 signature. Returns { valid, details }. `valid` is true only " +
-      "if the submitted action, context, AND actor_metadata all match the receipt AND the " +
-      "signature is valid under the service's public key. Free. A 200 response means " +
-      "verification ran — always read `valid` (false means the record was altered or the " +
-      "receipt forged).",
+      "FREE. Verifies an audit receipt against its record (re-hashes the submitted action + context, checks they and actor_metadata match the receipt, plus the Ed25519 signature).\n" +
+      "USE WHEN you have an audit receipt + the original action/metadata and need to confirm the record is genuine and unaltered.\n" +
+      "RETURNS: { valid, details }. valid is true only if action, context, AND actor_metadata all match the receipt AND the signature is valid. A 200 means verification ran — always read valid (false = record altered or receipt forged).",
     inputSchema: {
       action: z.string().describe("The action the receipt was issued for."),
-      actor_metadata: z
-        .record(z.unknown())
-        .describe("The actor_metadata the receipt was issued for."),
+      actor_metadata: z.record(z.unknown()).describe("The actor_metadata the receipt was issued for."),
       context: z
         .record(z.unknown())
         .optional()
         .describe("The optional context the receipt was issued for (omit if none)."),
-      receipt: receiptShape.describe(
-        "An audit receipt as returned by audit_action.",
-      ),
+      receipt: receiptShape.describe("An audit receipt as returned by audit_action."),
     },
+    outputSchema: verifyOutput,
   },
 ];

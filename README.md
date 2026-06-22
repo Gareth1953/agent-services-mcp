@@ -16,6 +16,23 @@ and use them through one connection:
 > scoring, or payment logic — those live in the underlying services. The honesty
 > about what each service proves carries through to the tool descriptions.
 
+## Quickstart — your first (free) call in ~2 minutes
+
+```bash
+npm install && npm run build
+node examples/free-call.mjs       # connects to the LIVE services and calls a free tool
+```
+
+`examples/free-call.mjs` runs an MCP client against this server (pointed at the live
+deployments) and calls `get_quality_rubric` and `verify_audit` — both **free**, no
+wallet needed. To wire the server into an MCP client (Claude Desktop / Claude Code
+style), see **Connecting an MCP client** below.
+
+**Free vs paid at a glance:** `verify_provenance`, `verify_quality`, `verify_audit`,
+and `get_quality_rubric` are **free**. `certify_provenance`, `score_quality`, and
+`audit_action` are **paid** (an x402 USDC micropayment on Base) — see **Calling paid
+tools** for the two-step payment flow and a working example.
+
 ## What the wrapped services prove (and do not)
 
 - **Provenance:** proves the content is unmodified (SHA-256 hash) and the receipt
@@ -44,10 +61,15 @@ and use them through one connection:
 | `audit_action`       | agent-action-audit `POST /v1/audit`      | yes (x402) | `action` (string), `actor_metadata` (object), `context` (object, optional) |
 | `verify_audit`       | agent-action-audit `POST /v1/verify`     | no         | `action` (string), `actor_metadata` (object), `context` (object, optional), `receipt` (object) |
 
-Full descriptions and Zod input schemas: [`src/tools.ts`](src/tools.ts). Each
-tool returns the service's raw JSON (or markdown, for the rubric) as text. A
-non-2xx response from a service (including a `402 Payment Required`) is surfaced
-with `isError: true` and the response body preserved, so the caller can react.
+Full descriptions and Zod input/output schemas: [`src/tools.ts`](src/tools.ts).
+Each tool returns the service's raw JSON (or markdown, for the rubric) as text; the
+`verify_*` and `score_quality` tools **also** declare an `outputSchema` and return
+parsed **`structuredContent`** you can read directly (e.g. `result.structuredContent.valid`).
+A non-2xx response (including a `402 Payment Required`) is surfaced with
+`isError: true` and the body preserved — for a `402` the wrapper prepends a short,
+actionable note on how to pay. The three **paid** tools also accept an optional
+**`x_payment`** input (the x402 X-PAYMENT token) to settle payment through the
+wrapper — see **Calling paid tools**.
 
 ## Configuration
 
@@ -68,6 +90,33 @@ agent-action-audit on `:8789` to avoid clashes).
 > `score_quality`, `audit_action`) require x402 — this wrapper forwards the request
 > and holds no wallet, so without an `X-PAYMENT` they return a `402` (the payment
 > requirements) surfaced as `isError`. The free tools work as normal.
+
+## Calling paid tools (x402)
+
+The three paid tools require an x402 micropayment (USDC on Base mainnet). The wrapper
+**holds no wallet** — it never spends on your behalf — so paying is a two-step flow:
+
+1. **Call the tool with no `x_payment`.** You get back a `402` whose body is the x402
+   payment **requirements** (network, asset, amount, `payTo`). The wrapper prepends a
+   one-line note explaining what to do next.
+2. **Build an x402 `X-PAYMENT` token** from those requirements with an x402 client +
+   a funded wallet, then **call the tool again with that token in the `x_payment`
+   input.** The wrapper forwards it as the `X-PAYMENT` header; the underlying service
+   verifies, settles, and returns the signed receipt.
+
+Easiest path to a *working* paid call — let an x402 client settle for you against the
+underlying service directly:
+
+```bash
+npm install x402-fetch
+BUYER_PRIVATE_KEY=0x...  node examples/paid-call.mjs
+```
+
+`examples/paid-call.mjs` uses `x402-fetch` + a **throwaway** Base-mainnet wallet
+(holding a little real USDC) to pay for and call `audit_action`. ~$0.01 USDC moves
+buyer → the service's `payTo`, gasless (the facilitator pays gas). **Real money — use
+a disposable key with a few cents only.** The same applies to `certify_provenance`
+and `score_quality`.
 
 ## Quickstart (local)
 

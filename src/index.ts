@@ -41,21 +41,51 @@ async function forward(
   args: Record<string, unknown>,
 ): Promise<CallToolResult> {
   const url = baseUrlFor(tool.service) + tool.path;
+  // Pull the optional x402 payment token out of the args — it goes in the
+  // X-PAYMENT header, NOT the request body.
+  const { x_payment, ...payload } = args ?? {};
   try {
+    const headers: Record<string, string> = {};
+    if (tool.method === "POST") headers["content-type"] = "application/json";
+    if (typeof x_payment === "string" && x_payment.length > 0) {
+      headers["X-PAYMENT"] = x_payment;
+    }
     const init: RequestInit = {
       method: tool.method,
       signal: AbortSignal.timeout(30_000),
+      headers,
     };
-    if (tool.method === "POST") {
-      init.headers = { "content-type": "application/json" };
-      init.body = JSON.stringify(args ?? {});
-    }
+    if (tool.method === "POST") init.body = JSON.stringify(payload);
+
     const res = await fetch(url, init);
     const body = await res.text();
-    return {
-      content: [{ type: "text", text: body }],
+
+    // Make the common paid-tool case actionable for an agent.
+    let text = body;
+    if (res.status === 402) {
+      text =
+        "Payment required (402). This is a paid tool and no valid payment was supplied. " +
+        "Build an x402 X-PAYMENT token from the requirements below and call this tool again " +
+        "with it in the `x_payment` input. This wrapper holds no wallet of its own.\n\n" +
+        body;
+    }
+
+    const result: CallToolResult = {
+      content: [{ type: "text", text }],
       isError: !res.ok,
     };
+    // Structured output for tools that declare an outputSchema (JSON bodies only).
+    if (res.ok && tool.outputSchema) {
+      try {
+        const parsed = JSON.parse(body);
+        if (parsed && typeof parsed === "object") {
+          result.structuredContent = parsed as Record<string, unknown>;
+        }
+      } catch {
+        /* non-JSON success — leave as text only */
+      }
+    }
+    return result;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
@@ -73,7 +103,7 @@ async function forward(
 async function main(): Promise<void> {
   const server = new McpServer({
     name: "agent-services-mcp",
-    version: "0.1.0",
+    version: "0.2.1",
   });
 
   for (const tool of TOOLS) {
@@ -83,6 +113,7 @@ async function main(): Promise<void> {
         title: tool.title,
         description: tool.description,
         inputSchema: tool.inputSchema,
+        ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
       },
       (args) => forward(tool, (args ?? {}) as Record<string, unknown>),
     );
